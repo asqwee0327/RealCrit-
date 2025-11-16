@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify, request, send_from_directory
+from flask import Flask, render_template_string, jsonify, send_from_directory
 import os
 
 app = Flask(__name__)
@@ -9,6 +9,8 @@ slide_index    = 1
 history        = {}
 
 # ====================== Presenter 페이지 ======================
+#  - 전체 화면에 Google Slides embed
+#  - 그 위에 🔥 이모티콘 레이어만 존재
 PRESENTER_HTML = r"""
 <!doctype html>
 <html lang="ko">
@@ -17,42 +19,115 @@ PRESENTER_HTML = r"""
   <title>Presenter View</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
-    h1 { margin-bottom: 10px; }
-    .big { font-size: 48px; font-weight: 700; margin: 12px 0; }
-    button { padding:10px 16px; font-weight:600; border-radius:10px; border:0; background:#2563eb; color:#fff; cursor:pointer; }
-    a { color:#2563eb; text-decoration:none; }
-    .muted { color:#666; font-size:14px; }
+    * { box-sizing:border-box; }
+    html, body {
+      margin:0;
+      padding:0;
+      width:100%;
+      height:100%;
+      background:#000;
+      overflow:hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    .root {
+      position:relative;
+      width:100%;
+      height:100%;
+      overflow:hidden;
+    }
+    /* 슬라이드 iframe: 화면 전체 채우기 */
+    iframe {
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      border:0;
+    }
+    /* 🔥 이모티콘 레이어 (iframe 위) */
+    #emoji-layer {
+      pointer-events:none;
+      position:absolute;
+      inset:0;
+      overflow:hidden;
+      z-index:10;
+    }
+    .emoji {
+      position:absolute;
+      font-size:46px;
+      animation: riseUp 1.0s ease-out forwards;
+    }
+    @keyframes riseUp {
+      0%   { transform: translateY(0)    scale(1.0);  opacity:1; }
+      60%  { transform: translateY(-70px) scale(1.15); opacity:1; }
+      100% { transform: translateY(-120px) scale(0.9); opacity:0; }
+    }
   </style>
 </head>
 <body>
-  <h1>👏 Audience Reaction System</h1>
-  <p class="muted">청중 링크 → <a href="/audience" target="_blank">/audience</a> (ngrok <b>https</b>로 공유)</p>
+  <div class="root">
+    <!-- 정수 구글 슬라이드 embed (자동넘김 없음) -->
+    <iframe
+      src="https://docs.google.com/presentation/d/16CF0ulKWAy1S52Rrql8DJT1DSv2MyPlMhxN_6KE2nMY/embed?start=false&loop=false"
+      allowfullscreen
+    ></iframe>
 
-  <p>현재 슬라이드: <span id="slide">{{ slide }}</span></p>
-  <p class="big">👍 반응 수: <span id="count">0</span></p>
-  <button id="next">다음 슬라이드</button>
+    <!-- 🔥 이모티콘 레이어 -->
+    <div id="emoji-layer"></div>
+  </div>
 
   <script>
-    const c = document.getElementById('count');
-    const s = document.getElementById('slide');
-    async function refresh(){
+    const layer = document.getElementById('emoji-layer');
+    let lastCount = 0;
+
+    function spawnFire() {
+      const e = document.createElement('div');
+      e.className = 'emoji';
+      e.textContent = '🔥';
+
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      // 가로 20~80% 랜덤, 세로는 화면 아래쪽에서 시작
+      const x = vw * 0.2 + Math.random() * vw * 0.6;
+      const y = vh * 0.7;
+
+      e.style.left = x + 'px';
+      e.style.top  = y + 'px';
+
+      layer.appendChild(e);
+      e.addEventListener('animationend', () => e.remove());
+    }
+
+    async function refresh() {
       try {
         const r = await fetch('/count');
         const d = await r.json();
-        c.textContent = d.count;
-        s.textContent = d.slide;
-      } catch {}
+        const newCount = d.count ?? 0;
+
+        const diff = newCount - lastCount;
+        if (diff > 0) {
+          // 👍 1번당 불꽃 5~6개씩
+          for (let i = 0; i < diff; i++) {
+            const burst = 5 + Math.floor(Math.random() * 2); // 5 또는 6
+            for (let j = 0; j < burst; j++) {
+              spawnFire();
+            }
+          }
+        }
+        lastCount = newCount;
+      } catch (e) {
+        console.warn('refresh error', e);
+      }
     }
-    setInterval(refresh, 800);
-    document.getElementById('next').onclick = ()=> fetch('/next', {method:'POST'});
+
+    // 좀 더 즉각적으로 보이게 0.2초마다 체크
+    setInterval(refresh, 200);
   </script>
 </body>
 </html>
 """
 
-# ====================== Audience 페이지 ======================
+# ====================== Audience 페이지 (기존 Mediapipe) ======================
 AUDIENCE_HTML = r"""
 <!doctype html>
 <html lang="ko">
@@ -97,10 +172,9 @@ AUDIENCE_HTML = r"""
         <div class="badge">Sent <span id="sent">0</span></div>
       </div>
       <div class="row" style="margin-top:14px">
-        <button id="start">🎥 카메라 시작</button>
+        <button id="start">🎥 START</button>
         <button id="test">Send test POST</button>
       </div>
-      <p class="hint">엄지척(👍)이 <b>연속 3프레임</b> 감지되면 1회 전송,<br>제스처를 내리고 <b>10프레임</b> 지나면 다시 전송 가능.</p>
       <p class="hint" id="warn"></p>
     </div>
   </div>
@@ -226,7 +300,7 @@ AUDIENCE_HTML = r"""
       });
       video.srcObject = stream;
       await new Promise(res => video.onloadedmetadata = res);
-      await video.play();  // ⭐ 반드시 호출 (자동재생 정책 회피)
+      await video.play();
       status("Camera on", "ok");
 
       await initModel();
@@ -256,7 +330,7 @@ AUDIENCE_HTML = r"""
   document.getElementById("test").onclick = ()=> sendReact();
 
   if (location.protocol !== "https:" && location.hostname !== "localhost") {
-    warnEl.textContent = "⚠️ HTTPS 링크(ngrok https)로 접속해야 카메라 접근이 가능해요.";
+    warnEl.textContent = "⚠️ HTTPS 링크로 접속해야 카메라 접근이 가능해요.";
   }
 
   // 필수 파일이 있는지 빠르게 확인해서 없으면 안내
@@ -274,70 +348,71 @@ AUDIENCE_HTML = r"""
 """
 
 # ====================== Routes ======================
+
 @app.route("/")
 def presenter():
-    return render_template_string(PRESENTER_HTML, slide=slide_index)
+  return render_template_string(PRESENTER_HTML, slide=slide_index)
 
 @app.route("/audience")
 def audience():
-    return render_template_string(AUDIENCE_HTML)
+  return render_template_string(AUDIENCE_HTML)
 
-# 로컬에 저장한 mediapipe wasm/모델 파일 제공
+# Mediapipe wasm/모델 파일 제공
 @app.route("/mp/<path:filename>")
 def mp_files(filename):
-    return send_from_directory("static/mp", filename)
+  return send_from_directory("static/mp", filename)
 
 # 필수 파일 존재 여부 확인 (클라이언트에서 안내용)
 @app.route("/mp/check")
 def mp_check():
-    base = os.path.join(app.root_path, "static", "mp")
-    files = {
-        "vision_wasm_internal.js": os.path.exists(os.path.join(base, "vision_wasm_internal.js")),
-        "vision_wasm_internal.wasm": os.path.exists(os.path.join(base, "vision_wasm_internal.wasm")),
-        "hand_landmarker.task": os.path.exists(os.path.join(base, "hand_landmarker.task")),
-    }
-    return jsonify(files)
+  base = os.path.join(app.root_path, "static", "mp")
+  files = {
+      "vision_wasm_internal.js": os.path.exists(os.path.join(base, "vision_wasm_internal.js")),
+      "vision_wasm_internal.wasm": os.path.exists(os.path.join(base, "vision_wasm_internal.wasm")),
+      "hand_landmarker.task": os.path.exists(os.path.join(base, "hand_landmarker.task")),
+  }
+  return jsonify(files)
 
 @app.route("/react", methods=["POST"])
 def react():
-    global reaction_count
-    reaction_count += 1
-    return "", 204
+  global reaction_count
+  reaction_count += 1
+  return "", 204
 
 @app.route("/count")
 def count():
-    return jsonify({"count": reaction_count, "slide": slide_index})
+  return jsonify({"count": reaction_count, "slide": slide_index})
 
 @app.route("/next", methods=["POST"])
 def next_slide():
-    global reaction_count, slide_index, history
-    history[slide_index] = reaction_count
-    slide_index += 1
-    reaction_count = 0
-    return "", 204
+  global reaction_count, slide_index, history
+  history[slide_index] = reaction_count
+  slide_index += 1
+  reaction_count = 0
+  return "", 204
 
 @app.route("/summary")
 def summary():
-    return jsonify(history)
+  return jsonify(history)
 
 # 카메라 단독 테스트 (권한/점유 문제 빠르게 확인)
 @app.route("/camtest")
 def camtest():
-    return render_template_string("""
-    <video id="v" playsinline autoplay muted style="width:80vw;max-width:900px;background:#000"></video>
-    <pre id="e" style="white-space:pre-wrap;"></pre>
-    <script>
-      (async()=>{
-        try{
-          const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
-          v.srcObject=s; await v.play();
-        }catch(err){ e.textContent = String(err && (err.message||err.name) || err); }
-      })();
-    </script>
-    """)
+  return render_template_string("""
+  <video id="v" playsinline autoplay muted style="width:80vw;max-width:900px;background:#000"></video>
+  <pre id="e" style="white-space:pre-wrap;"></pre>
+  <script>
+    (async()=>{
+      try{
+        const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+        v.srcObject=s; await v.play();
+      }catch(err){ e.textContent = String(err && (err.message||err.name) || err); }
+    })();
+  </script>
+  """)
 
 # ====================== 실행 ======================
 if __name__ == "__main__":
-    print("✅ Presenter : http://localhost:8000")
-    print("✅ Audience  : http://localhost:8000/audience (또는 ngrok https 링크)")
-    app.run(host="0.0.0.0", port=8000, debug=False)
+  print("✅ Presenter : http://localhost:8000")
+  print("✅ Audience  : http://localhost:8000/audience")
+  app.run(host="0.0.0.0", port=8000, debug=False)
