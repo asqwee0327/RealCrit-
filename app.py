@@ -1,0 +1,343 @@
+from flask import Flask, render_template_string, jsonify, request, send_from_directory
+import os
+
+app = Flask(__name__)
+
+# ====================== 상태 변수 ======================
+reaction_count = 0
+slide_index    = 1
+history        = {}
+
+# ====================== Presenter 페이지 ======================
+PRESENTER_HTML = r"""
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Presenter View</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
+    h1 { margin-bottom: 10px; }
+    .big { font-size: 48px; font-weight: 700; margin: 12px 0; }
+    button { padding:10px 16px; font-weight:600; border-radius:10px; border:0; background:#2563eb; color:#fff; cursor:pointer; }
+    a { color:#2563eb; text-decoration:none; }
+    .muted { color:#666; font-size:14px; }
+  </style>
+</head>
+<body>
+  <h1>👏 Audience Reaction System</h1>
+  <p class="muted">청중 링크 → <a href="/audience" target="_blank">/audience</a> (ngrok <b>https</b>로 공유)</p>
+
+  <p>현재 슬라이드: <span id="slide">{{ slide }}</span></p>
+  <p class="big">👍 반응 수: <span id="count">0</span></p>
+  <button id="next">다음 슬라이드</button>
+
+  <script>
+    const c = document.getElementById('count');
+    const s = document.getElementById('slide');
+    async function refresh(){
+      try {
+        const r = await fetch('/count');
+        const d = await r.json();
+        c.textContent = d.count;
+        s.textContent = d.slide;
+      } catch {}
+    }
+    setInterval(refresh, 800);
+    document.getElementById('next').onclick = ()=> fetch('/next', {method:'POST'});
+  </script>
+</body>
+</html>
+"""
+
+# ====================== Audience 페이지 ======================
+AUDIENCE_HTML = r"""
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>👍 Thumbs-Up Detector</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#0b0b0c; color:#eaeaea; }
+    .wrap { display:flex; gap:16px; padding:16px; flex-wrap:wrap; }
+    .panel { background:#141416; border-radius:14px; padding:12px; box-shadow:0 0 0 1px #232328 inset; }
+    canvas, video { width: 46vw; max-width: 720px; aspect-ratio: 4/3; border-radius:12px; background:#0f0f11; }
+    .right { min-width: 320px; flex: 1 1 340px; }
+    .badge { background:#1f2026; padding:6px 10px; border-radius:999px; display:inline-flex; gap:8px; align-items:center; margin:4px 6px 0 0; }
+    button { background:#2563eb; color:white; border:0; border-radius:10px; padding:10px 16px; font-weight:600; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:default; }
+    .hint { color:#9aa0a6; font-size:14px; line-height:1.5; margin-top:10px; }
+    .row { display:flex; gap:12px; margin-top:10px; align-items:center; }
+    .err { color:#ff7a7a; }
+    .ok { color:#7ddc7a; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <video id="video" playsinline muted style="display:none"></video>
+      <canvas id="viewL"></canvas>
+    </div>
+
+    <div class="panel">
+      <canvas id="viewR"></canvas>
+    </div>
+
+    <div class="panel right">
+      <h2>👍 Thumbs-Up Detector (Only counts 👍)</h2>
+      <div class="row">
+        <div class="badge">Status <span id="status">Idle</span></div>
+      </div>
+      <div class="row">
+        <div class="badge">Hands <span id="hands">0</span></div>
+        <div class="badge">Sent <span id="sent">0</span></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="start">🎥 카메라 시작</button>
+        <button id="test">Send test POST</button>
+      </div>
+      <p class="hint">엄지척(👍)이 <b>연속 3프레임</b> 감지되면 1회 전송,<br>제스처를 내리고 <b>10프레임</b> 지나면 다시 전송 가능.</p>
+      <p class="hint" id="warn"></p>
+    </div>
+  </div>
+
+  <!-- =====================  MAIN SCRIPT  ===================== -->
+  <script type="module">
+  import {
+    FilesetResolver,
+    HandLandmarker,
+    DrawingUtils
+  } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+  const statusEl = document.getElementById("status");
+  const handsEl  = document.getElementById("hands");
+  const sentEl   = document.getElementById("sent");
+  const warnEl   = document.getElementById("warn");
+  const video    = document.getElementById("video");
+  const viewL    = document.getElementById("viewL");
+  const viewR    = document.getElementById("viewR");
+  const ctxL     = viewL.getContext("2d");
+  const ctxR     = viewR.getContext("2d");
+  const drawer   = new DrawingUtils(ctxR);
+
+  // ---- 로컬 경로(Flask가 제공) ----
+  const LOCAL_BASE = "/mp"; // 여기에서 wasm/js/task 3개를 가져옴
+
+  let landmarker = null;
+  let running = false;
+  let sendCooldown = 0;
+  let holdFrames   = 0;
+  let sentCount    = 0;
+
+  function status(t, cls=''){ statusEl.textContent = t; statusEl.className = cls; }
+  function setHands(n){ handsEl.textContent = n; }
+  function setSent(n){  sentEl.textContent  = n; }
+
+  async function initModel(){
+    status("Loading model…");
+    const files = await FilesetResolver.forVisionTasks(LOCAL_BASE);
+    landmarker = await HandLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: `${LOCAL_BASE}/hand_landmarker.task` },
+      runningMode: "VIDEO",
+      numHands: 4,
+      minHandDetectionConfidence: 0.6,
+      minHandPresenceConfidence: 0.6,
+      minTrackingConfidence: 0.6,
+    });
+    status("Model ready", "ok");
+  }
+
+  function fitCanvases(){
+    const w = video.videoWidth  || 640;
+    const h = video.videoHeight || 480;
+    if (viewL.width !== w){ viewL.width = w; viewR.width = w; }
+    if (viewL.height!== h){ viewL.height= h; viewR.height= h; }
+  }
+
+  // 빠르고 보수적인 엄지척 판정 (엄지 끝이 다른 손가락/손목보다 위)
+  function isThumbsUp(lm){
+    if (!lm || lm.length < 21) return false;
+    const wr  = lm[0];
+    const t4  = lm[4];
+    const i8  = lm[8], m12 = lm[12], r16 = lm[16], p20 = lm[20];
+    return t4.y < wr.y && t4.y < i8.y && t4.y < m12.y && t4.y < r16.y && t4.y < p20.y;
+  }
+
+  function drawResults(results){
+    ctxR.clearRect(0,0,viewR.width,viewR.height);
+    if (!results || !results.landmarks){ setHands(0); return 0; }
+    let up = 0;
+    for (const lm of results.landmarks){
+      drawer.drawLandmarks(lm, { radius: 1.6 });
+      drawer.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS, { lineWidth: 1 });
+      if (isThumbsUp(lm)) up++;
+    }
+    setHands(results.landmarks.length);
+    return up;
+  }
+
+  async function sendReact(){
+    try { await fetch("/react", { method:"POST" }); setSent(++sentCount); }
+    catch(e){ console.warn("POST /react 실패", e); }
+  }
+
+  async function loop(){
+    if (!running || !landmarker) return;
+    try{
+      fitCanvases();
+
+      // 좌측: 미러 비디오
+      ctxL.save();
+      ctxL.scale(-1,1);
+      ctxL.drawImage(video, -viewL.width, 0, viewL.width, viewL.height);
+      ctxL.restore();
+
+      const now = performance.now();
+      const results = landmarker.detectForVideo(video, now);
+      const ups = drawResults(results);
+
+      if (ups > 0){
+        holdFrames++;
+        if (holdFrames >= 3 && sendCooldown === 0){
+          sendCooldown = 10; // 10프레임 쿨다운
+          holdFrames = 0;
+          sendReact();
+        }
+      } else {
+        holdFrames = 0;
+        if (sendCooldown>0) sendCooldown--;
+      }
+    }catch(e){
+      console.warn('detect error', e);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  async function startCamera(){
+    try{
+      status("Requesting camera…");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width:{ideal:640}, height:{ideal:480}, frameRate:{ideal:15, max:24} },
+        audio: false
+      });
+      video.srcObject = stream;
+      await new Promise(res => video.onloadedmetadata = res);
+      await video.play();  // ⭐ 반드시 호출 (자동재생 정책 회피)
+      status("Camera on", "ok");
+
+      await initModel();
+
+      running = true;
+      status("Running (raise 👍)", "ok");
+      loop();
+    }catch(e){
+      const msg = (e && (e.message || e.name)) ? e.message || e.name : String(e);
+      let human = '카메라 시작 실패. ';
+      const lower = msg.toLowerCase();
+      if (lower.includes('notallowed') || lower.includes('permission')) human += '브라우저 주소창 카메라 권한을 허용해 주세요.';
+      else if (lower.includes('notfound') || lower.includes('device')) human += '사용 가능한 카메라가 없거나 다른 앱이 점유 중입니다(Zoom/Meet/OBS 종료).';
+      else human += msg;
+      status(human, 'err');
+      throw e;
+    }
+  }
+
+  document.getElementById("start").onclick = async (ev)=>{
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try { await startCamera(); btn.remove(); }
+    catch(e){ btn.disabled = false; }
+  };
+
+  document.getElementById("test").onclick = ()=> sendReact();
+
+  if (location.protocol !== "https:" && location.hostname !== "localhost") {
+    warnEl.textContent = "⚠️ HTTPS 링크(ngrok https)로 접속해야 카메라 접근이 가능해요.";
+  }
+
+  // 필수 파일이 있는지 빠르게 확인해서 없으면 안내
+  fetch('/mp/check').then(r=>r.json()).then(j=>{
+    const miss = Object.entries(j).filter(([k,v])=>!v).map(([k])=>k);
+    if (miss.length){
+      warnEl.innerHTML = "❌ 필수 파일 누락: <b>" + miss.join(', ') + "</b><br>static/mp 폴더에 3개 파일(vision_wasm_internal.js, vision_wasm_internal.wasm, hand_landmarker.task)을 넣으세요.";
+      status("Missing files", "err");
+      document.getElementById('start').disabled = true;
+    }
+  }).catch(()=>{});
+  </script>
+</body>
+</html>
+"""
+
+# ====================== Routes ======================
+@app.route("/")
+def presenter():
+    return render_template_string(PRESENTER_HTML, slide=slide_index)
+
+@app.route("/audience")
+def audience():
+    return render_template_string(AUDIENCE_HTML)
+
+# 로컬에 저장한 mediapipe wasm/모델 파일 제공
+@app.route("/mp/<path:filename>")
+def mp_files(filename):
+    return send_from_directory("static/mp", filename)
+
+# 필수 파일 존재 여부 확인 (클라이언트에서 안내용)
+@app.route("/mp/check")
+def mp_check():
+    base = os.path.join(app.root_path, "static", "mp")
+    files = {
+        "vision_wasm_internal.js": os.path.exists(os.path.join(base, "vision_wasm_internal.js")),
+        "vision_wasm_internal.wasm": os.path.exists(os.path.join(base, "vision_wasm_internal.wasm")),
+        "hand_landmarker.task": os.path.exists(os.path.join(base, "hand_landmarker.task")),
+    }
+    return jsonify(files)
+
+@app.route("/react", methods=["POST"])
+def react():
+    global reaction_count
+    reaction_count += 1
+    return "", 204
+
+@app.route("/count")
+def count():
+    return jsonify({"count": reaction_count, "slide": slide_index})
+
+@app.route("/next", methods=["POST"])
+def next_slide():
+    global reaction_count, slide_index, history
+    history[slide_index] = reaction_count
+    slide_index += 1
+    reaction_count = 0
+    return "", 204
+
+@app.route("/summary")
+def summary():
+    return jsonify(history)
+
+# 카메라 단독 테스트 (권한/점유 문제 빠르게 확인)
+@app.route("/camtest")
+def camtest():
+    return render_template_string("""
+    <video id="v" playsinline autoplay muted style="width:80vw;max-width:900px;background:#000"></video>
+    <pre id="e" style="white-space:pre-wrap;"></pre>
+    <script>
+      (async()=>{
+        try{
+          const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+          v.srcObject=s; await v.play();
+        }catch(err){ e.textContent = String(err && (err.message||err.name) || err); }
+      })();
+    </script>
+    """)
+
+# ====================== 실행 ======================
+if __name__ == "__main__":
+    print("✅ Presenter : http://localhost:8000")
+    print("✅ Audience  : http://localhost:8000/audience (또는 ngrok https 링크)")
+    app.run(host="0.0.0.0", port=8000, debug=False)
