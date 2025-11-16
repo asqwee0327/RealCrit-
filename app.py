@@ -11,7 +11,7 @@ history        = {}
 # ====================== Presenter 페이지 ======================
 #  - 전체 화면에 Google Slides embed
 #  - 그 위에 🔥 이모티콘 레이어만 존재
-PRESENTER_HTML = r"""
+PRESENTER_HTML = PRESENTER_HTML = r"""
 <!doctype html>
 <html lang="ko">
 <head>
@@ -43,7 +43,7 @@ PRESENTER_HTML = r"""
       height:100%;
       border:0;
     }
-    /* 🔥 이모티콘 레이어 (iframe 위) */
+    /* 이펙트 레이어 (iframe 위) */
     #emoji-layer {
       pointer-events:none;
       position:absolute;
@@ -51,15 +51,66 @@ PRESENTER_HTML = r"""
       overflow:hidden;
       z-index:10;
     }
+
+    /* 메인 불꽃 이모티콘 */
     .emoji {
       position:absolute;
-      font-size:46px;
-      animation: riseUp 1.0s ease-out forwards;
+      font-size:48px;
+      animation: riseUp var(--dur,1s) ease-out forwards;
+      filter: drop-shadow(0 0 8px rgba(255,120,0,0.75));
     }
+
+    /* 주변에 튀는 작은 불꽃 점들 */
+    .spark {
+      position:absolute;
+      width:8px;
+      height:8px;
+      border-radius:999px;
+      background: radial-gradient(circle at 30% 30%, #fff7d1 0, #ffc94a 35%, #ff6b00 100%);
+      box-shadow:0 0 10px rgba(255,140,0,0.8);
+      opacity:0.95;
+      animation: sparkUp var(--dur,0.7s) ease-out forwards;
+    }
+
     @keyframes riseUp {
-      0%   { transform: translateY(0)    scale(1.0);  opacity:1; }
-      60%  { transform: translateY(-70px) scale(1.15); opacity:1; }
-      100% { transform: translateY(-120px) scale(0.9); opacity:0; }
+      0%   { transform: translate3d(0,0,0) scale(1.0);   opacity:1; }
+      60%  { transform: translate3d(0,-70px,0) scale(1.18); opacity:1; }
+      100% { transform: translate3d(0,-120px,0) scale(0.9); opacity:0; }
+    }
+
+    /* 좌우로 살짝 흩어지며 위로 올라가는 스파크 */
+    @keyframes sparkUp {
+      0% {
+        transform: translate3d(0,0,0) scale(1);
+        opacity:0.95;
+      }
+      100% {
+        transform: translate3d(var(--dx,0px), -60px, 0) scale(0.4);
+        opacity:0;
+      }
+    }
+
+    /* ===== 폭죽 파티클 ===== */
+    .fw-spark {
+      position:absolute;
+      width:10px;
+      height:10px;
+      border-radius:999px;
+      background: radial-gradient(circle at 30% 30%, #ffffff 0, var(--col,#ff6b6b) 40%, #000 100%);
+      box-shadow:0 0 12px var(--col,rgba(255,255,255,0.9));
+      opacity:0.95;
+      animation: fwOut var(--dur,0.9s) ease-out forwards;
+    }
+
+    @keyframes fwOut {
+      0% {
+        transform: translate3d(0,0,0) scale(1);
+        opacity:1;
+      }
+      100% {
+        transform: translate3d(var(--dx,0px), var(--dy,-80px), 0) scale(0.4);
+        opacity:0;
+      }
     }
   </style>
 </head>
@@ -71,7 +122,7 @@ PRESENTER_HTML = r"""
       allowfullscreen
     ></iframe>
 
-    <!-- 🔥 이모티콘 레이어 -->
+    <!-- 🔥 이모티콘 + 파티클 레이어 -->
     <div id="emoji-layer"></div>
   </div>
 
@@ -79,11 +130,8 @@ PRESENTER_HTML = r"""
     const layer = document.getElementById('emoji-layer');
     let lastCount = 0;
 
+    // 메인 불꽃 + 주변 스파크
     function spawnFire() {
-      const e = document.createElement('div');
-      e.className = 'emoji';
-      e.textContent = '🔥';
-
       const vw = window.innerWidth;
       const vh = window.innerHeight;
 
@@ -91,11 +139,76 @@ PRESENTER_HTML = r"""
       const x = vw * 0.2 + Math.random() * vw * 0.6;
       const y = vh * 0.7;
 
-      e.style.left = x + 'px';
-      e.style.top  = y + 'px';
+      // 메인 🔥 이모티콘
+      const flame = document.createElement('div');
+      flame.className = 'emoji';
+      flame.textContent = '🔥';
+      flame.style.left = x + 'px';
+      flame.style.top  = y + 'px';
+      flame.style.setProperty('--dur', (0.85 + Math.random()*0.4) + 's');
 
-      layer.appendChild(e);
-      e.addEventListener('animationend', () => e.remove());
+      layer.appendChild(flame);
+      flame.addEventListener('animationend', () => flame.remove());
+
+      // 주변에 튀는 작은 스파크들 (3~5개)
+      const sparkCount = 3 + Math.floor(Math.random()*3);
+      for (let i = 0; i < sparkCount; i++) {
+        const s = document.createElement('div');
+        s.className = 'spark';
+
+        // 시작 위치: 큰 불꽃 주변 약간 랜덤
+        const offsetX = (Math.random() - 0.5) * 26;   // -13 ~ +13
+        const offsetY = (Math.random() - 0.2) * 16;   // 살짝 위/아래
+
+        s.style.left = (x + offsetX) + 'px';
+        s.style.top  = (y + offsetY) + 'px';
+
+        // 위로 올라가면서 좌우로 퍼지는 정도 & 속도 랜덤
+        const dx = (Math.random() - 0.5) * 60; // -30 ~ +30
+        const dur = 0.45 + Math.random()*0.35; // 0.45 ~ 0.8s
+        s.style.setProperty('--dx', dx + 'px');
+        s.style.setProperty('--dur', dur + 's');
+
+        layer.appendChild(s);
+        s.addEventListener('animationend', () => s.remove());
+      }
+    }
+
+    // 5명 이상 동시에 👍 → 폭죽
+    function spawnFirework() {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      // 화면 중간 위쪽 어딘가에서 터지게
+      const x = vw * 0.2 + Math.random() * vw * 0.6;
+      const y = vh * (0.3 + Math.random()*0.2); // 30~50% 높이
+
+      const colors = ['#ff6b6b','#ffd93d','#4dd0e1','#7e57c2','#ff9f1a','#00e676'];
+      const count = 14 + Math.floor(Math.random()*6); // 14~19개
+
+      for (let i = 0; i < count; i++) {
+        const p = document.createElement('div');
+        p.className = 'fw-spark';
+
+        const angle = (Math.PI * 2 * i) / count + (Math.random()-0.5)*0.3;
+        const radius = 70 + Math.random()*50; // 70~120px
+
+        const dx = Math.cos(angle) * radius;
+        const dy = Math.sin(angle) * radius; // 위/아래 모두 흩어지게
+
+        const col = colors[Math.floor(Math.random()*colors.length)];
+        const dur = 0.7 + Math.random()*0.3;
+
+        p.style.left = x + 'px';
+        p.style.top  = y + 'px';
+        p.style.setProperty('--dx', dx + 'px');
+        p.style.setProperty('--dy', dy + 'px');
+        p.style.setProperty('--dur', dur + 's');
+        p.style.setProperty('--col', col);
+
+        layer.appendChild(p);
+        p.addEventListener('animationend', () => p.remove());
+      }
     }
 
     async function refresh() {
@@ -105,15 +218,25 @@ PRESENTER_HTML = r"""
         const newCount = d.count ?? 0;
 
         const diff = newCount - lastCount;
+
         if (diff > 0) {
-          // 👍 1번당 불꽃 5~6개씩
+          // 👍 1번당 "불꽃 묶음" 5~6개
           for (let i = 0; i < diff; i++) {
             const burst = 5 + Math.floor(Math.random() * 2); // 5 또는 6
             for (let j = 0; j < burst; j++) {
               spawnFire();
             }
           }
+
+          // 👥 diff가 5 이상이면 "동시에 5명 이상"으로 보고 폭죽 발사
+          if (diff >= 5) {
+            const fwTimes = diff >= 10 ? 2 : 1; // 너무 많으면 두 발
+            for (let k = 0; k < fwTimes; k++) {
+              spawnFirework();
+            }
+          }
         }
+
         lastCount = newCount;
       } catch (e) {
         console.warn('refresh error', e);
@@ -416,3 +539,4 @@ if __name__ == "__main__":
   print("✅ Presenter : http://localhost:8000")
   print("✅ Audience  : http://localhost:8000/audience")
   app.run(host="0.0.0.0", port=8000, debug=False)
+
