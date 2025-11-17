@@ -11,7 +11,7 @@ history        = {}
 # ====================== Presenter 페이지 ======================
 #  - 전체 화면에 Google Slides embed
 #  - 그 위에 🔥 이모티콘 레이어만 존재
-PRESENTER_HTML = PRESENTER_HTML = r"""
+PRESENTER_HTML = PRESENTER_HTML = PRESENTER_HTML = r"""
 <!doctype html>
 <html lang="ko">
 <head>
@@ -90,25 +90,31 @@ PRESENTER_HTML = PRESENTER_HTML = r"""
       }
     }
 
-    /* ===== 폭죽 파티클 ===== */
+    /* ===== 폭죽 파티클 (좀 더 크고 화려하게) ===== */
     .fw-spark {
       position:absolute;
-      width:10px;
-      height:10px;
+      width:14px;
+      height:14px;
       border-radius:999px;
       background: radial-gradient(circle at 30% 30%, #ffffff 0, var(--col,#ff6b6b) 40%, #000 100%);
-      box-shadow:0 0 12px var(--col,rgba(255,255,255,0.9));
-      opacity:0.95;
-      animation: fwOut var(--dur,0.9s) ease-out forwards;
+      box-shadow:
+        0 0 14px var(--col,rgba(255,255,255,0.9)),
+        0 0 28px rgba(255,255,255,0.45);
+      opacity:0.97;
+      animation: fwOut var(--dur,1.1s) cubic-bezier(0.16, 0.64, 0.29, 0.99) forwards;
     }
 
     @keyframes fwOut {
       0% {
-        transform: translate3d(0,0,0) scale(1);
+        transform: translate3d(0,0,0) scale(0.9);
+        opacity:1;
+      }
+      60% {
+        transform: translate3d(var(--dx,0px), var(--dy,-120px), 0) scale(1.1);
         opacity:1;
       }
       100% {
-        transform: translate3d(var(--dx,0px), var(--dy,-80px), 0) scale(0.4);
+        transform: translate3d(calc(var(--dx,0px) * 1.2), calc(var(--dy,-120px) * 1.2 + 40px), 0) scale(0.4);
         opacity:0;
       }
     }
@@ -174,30 +180,31 @@ PRESENTER_HTML = PRESENTER_HTML = r"""
       }
     }
 
-    // 5명 이상 동시에 👍 → 폭죽
+    // 3명 이상 동시에 👍 → 폭죽 (화면 랜덤 위치)
     function spawnFirework() {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
 
-      // 화면 중간 위쪽 어딘가에서 터지게
-      const x = vw * 0.2 + Math.random() * vw * 0.6;
-      const y = vh * (0.3 + Math.random()*0.2); // 30~50% 높이
+      // 화면 전체를 쓰되, 가장자리 너무 붙지 않게 약간 여유
+      const x = vw * (0.15 + Math.random()*0.7);  // 15% ~ 85%
+      const y = vh * (0.20 + Math.random()*0.5);  // 20% ~ 70%
 
       const colors = ['#ff6b6b','#ffd93d','#4dd0e1','#7e57c2','#ff9f1a','#00e676'];
-      const count = 14 + Math.floor(Math.random()*6); // 14~19개
+      const count = 22 + Math.floor(Math.random()*8); // 22~29개
 
       for (let i = 0; i < count; i++) {
         const p = document.createElement('div');
         p.className = 'fw-spark';
 
-        const angle = (Math.PI * 2 * i) / count + (Math.random()-0.5)*0.3;
-        const radius = 70 + Math.random()*50; // 70~120px
+        // 각도를 고르게 분포시키되 약간 랜덤
+        const angle = (Math.PI * 2 * i) / count + (Math.random()-0.5)*0.35;
+        const radius = 110 + Math.random()*80; // 110~190px
 
         const dx = Math.cos(angle) * radius;
-        const dy = Math.sin(angle) * radius; // 위/아래 모두 흩어지게
+        const dy = Math.sin(angle) * radius;
 
         const col = colors[Math.floor(Math.random()*colors.length)];
-        const dur = 0.7 + Math.random()*0.3;
+        const dur = 0.8 + Math.random()*0.4;
 
         p.style.left = x + 'px';
         p.style.top  = y + 'px';
@@ -228,7 +235,7 @@ PRESENTER_HTML = PRESENTER_HTML = r"""
             }
           }
 
-          // 👥 diff가 5 이상이면 "동시에 3명 이상"으로 보고 폭죽 발사
+          // 👥 diff가 3 이상이면 "동시에 3명 이상"으로 보고 폭죽 발사
           if (diff >= 3) {
             const fwTimes = diff >= 10 ? 2 : 1; // 너무 많으면 두 발
             for (let k = 0; k < fwTimes; k++) {
@@ -249,6 +256,7 @@ PRESENTER_HTML = PRESENTER_HTML = r"""
 </body>
 </html>
 """
+
 
 # ====================== Audience 페이지 (기존 Mediapipe) ======================
 AUDIENCE_HTML = r"""
@@ -539,5 +547,6 @@ if __name__ == "__main__":
   print("✅ Presenter : http://localhost:8000")
   print("✅ Audience  : http://localhost:8000/audience")
   app.run(host="0.0.0.0", port=8000, debug=False)
+
 
 
