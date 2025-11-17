@@ -228,8 +228,8 @@ PRESENTER_HTML = PRESENTER_HTML = r"""
             }
           }
 
-          // 👥 diff가 5 이상이면 "동시에 5명 이상"으로 보고 폭죽 발사
-          if (diff >= 5) {
+          // 👥 diff가 5 이상이면 "동시에 3명 이상"으로 보고 폭죽 발사
+          if (diff >= 3) {
             const fwTimes = diff >= 10 ? 2 : 1; // 너무 많으면 두 발
             for (let k = 0; k < fwTimes; k++) {
               spawnFirework();
@@ -539,4 +539,5 @@ if __name__ == "__main__":
   print("✅ Presenter : http://localhost:8000")
   print("✅ Audience  : http://localhost:8000/audience")
   app.run(host="0.0.0.0", port=8000, debug=False)
+
 
